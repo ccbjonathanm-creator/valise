@@ -7,7 +7,7 @@
 /* -------------------------------------------------------------------------
    1. STOCKAGE LOCAL
    ------------------------------------------------------------------------- */
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v8';
 const STORE_KEY = 'valise.v1';
 const BACKUP_KEY = 'valise.backup'; // sauvegarde automatique de secours
 
@@ -617,10 +617,15 @@ const elTop = () => document.getElementById('topbar');
 // Priorité au PAYS de la destination ; à défaut, photo du TYPE de voyage.
 const TYPE_BG = { plage:1, montagne:1, ville:1, roadtrip:1, camping:1, ski:1, rando:1, business:1, croisiere:1, festival:1, bienetre:1 };
 const COUNTRY_BG = { fr:1, es:1, it:1, gb:1, de:1, nl:1, ch:1, gr:1, pt:1, tr:1, ma:1, eg:1, us:1, ca:1, mx:1, jp:1, th:1, id:1 };
+// Ces types priment sur le pays : la scène (plage, ski) est plus parlante que la capitale.
+const TYPE_FIRST = { plage:1, ski:1 };
 function tripBg(trip) {
+  const types = trip.types || [];
+  const forced = types.find(x => TYPE_FIRST[x]);
+  if (forced) return 'img/bg-' + forced + '.jpg';
   const cc = (trip.countryCode || '').toLowerCase();
   if (COUNTRY_BG[cc]) return 'img/pays-' + cc + '.jpg';
-  const t = trip.types && trip.types.find(x => TYPE_BG[x]);
+  const t = types.find(x => TYPE_BG[x]);
   return 'img/bg-' + (t || 'home') + '.jpg';
 }
 

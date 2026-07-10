@@ -7,7 +7,7 @@
 /* -------------------------------------------------------------------------
    1. STOCKAGE LOCAL
    ------------------------------------------------------------------------- */
-const APP_VERSION = 'v2';
+const APP_VERSION = 'v3';
 const STORE_KEY = 'valise.v1';
 const BACKUP_KEY = 'valise.backup'; // sauvegarde automatique de secours
 
@@ -105,12 +105,21 @@ const TRIP_TYPES = [
   { id: 'ski', label: 'Ski / neige', emoji: '🎿' },
   { id: 'rando', label: 'Randonnée', emoji: '🥾' },
   { id: 'business', label: 'Pro / business', emoji: '💼' },
+  { id: 'croisiere', label: 'Croisière', emoji: '🚢' },
+  { id: 'festival', label: 'Festival', emoji: '🎪' },
+  { id: 'bienetre', label: 'Bien-être / spa', emoji: '🧖' },
 ];
 const TRIP_STYLES = [
   { id: 'budget', label: 'Petit budget', emoji: '💰' },
   { id: 'confort', label: 'Confort', emoji: '🛋️' },
   { id: 'luxe', label: 'Luxe', emoji: '✨' },
   { id: 'aventure', label: 'Aventure', emoji: '🧭' },
+];
+const TRANSPORTS = [
+  { id: 'avion', label: 'Avion', emoji: '✈️' },
+  { id: 'voiture', label: 'Voiture', emoji: '🚗' },
+  { id: 'train', label: 'Train', emoji: '🚆' },
+  { id: 'bateau', label: 'Bateau / ferry', emoji: '⛴️' },
 ];
 function typeMeta(id) { return TRIP_TYPES.find(t => t.id === id); }
 function tripEmoji(trip) {
@@ -264,10 +273,15 @@ function weatherView(w) {
 /* -------------------------------------------------------------------------
    5. MOTEUR DE RÈGLES — génère la liste d'items
    ------------------------------------------------------------------------- */
-const CATS = ['Documents & argent', 'Vêtements', 'Toilette & santé', 'Électronique',
+const CATS = ['À faire avant de partir', 'Documents & argent', 'Vêtements', 'Toilette & santé', 'Électronique',
   'Plage', 'Montagne & rando', 'Ski', 'Camping', 'Roadtrip', 'Business', 'Enfants', 'Divers'];
 
 function qty(days, perDay, cap) { return Math.min(cap, Math.max(1, Math.ceil(days * perDay))); }
+// Quantité totale pour le groupe : quantité par personne (plafonnée) × nombre de personnes.
+function qtyLabel(name, days, perDay, cap, nbPeople) {
+  const total = qty(days, perDay, cap) * Math.max(1, nbPeople);
+  return name + ' · ' + total + (nbPeople > 1 ? ' (' + nbPeople + ' pers.)' : '');
+}
 
 function generateItems(trip, wflags) {
   const items = [];
@@ -281,12 +295,41 @@ function generateItems(trip, wflags) {
 
   const days = nbDaysInclusive(trip);
   const nights = nbNights(trip);
-  const people = trip.adults + (trip.children ? trip.children.length : 0);
   const kids = trip.children || [];
+  const people = trip.adults + kids.length;
+  // Personnes qui portent des vêtements "adultes" (bébés ≤ 2 ans habillés via la section Enfants).
+  const clothingPeople = Math.max(1, trip.adults + kids.filter(a => a > 2).length);
   const abroad = trip.countryCode && trip.countryCode.toUpperCase() !== 'FR';
   const types = trip.types || [];
   const has = (t) => types.includes(t);
+  const transport = trip.transport || '';
   const f = wflags || {};
+
+  /* --- À faire avant de partir (tâches, pas des objets) --- */
+  const AV = 'À faire avant de partir';
+  add('Charger tous les appareils la veille', AV);
+  add('Vérifier fenêtres et portes fermées', AV);
+  add('Baisser le chauffage / couper l’eau si besoin', AV);
+  add('Débrancher les appareils inutiles', AV);
+  add('Sortir les poubelles / vider le frigo', AV);
+  if (nights >= 4) add('Faire suivre ou suspendre le courrier', AV, 'Absence prolongée');
+  add('Prévenir un proche ou un voisin', AV);
+  add('Laisser un double des clés à quelqu’un de confiance', AV);
+  add('Faire garder animaux / arroser les plantes', AV);
+  if (abroad) {
+    add('Vérifier la validité du passeport (6 mois)', AV, 'Voyage à l’étranger');
+    add('Prévenir la banque du voyage à l’étranger', AV);
+    add('Activer une option data / carte SIM locale', AV);
+  }
+  if (transport === 'avion') {
+    add('Enregistrement en ligne + carte d’embarquement', AV, 'Vol');
+    add('Vérifier poids et dimensions des bagages', AV, 'Vol');
+  }
+  if (transport === 'voiture' || has('roadtrip')) {
+    add('Faire le plein et vérifier les pneus', AV, 'Trajet en voiture');
+    add('Vérifier niveaux (huile, lave-glace)', AV);
+  }
+  if (transport === 'train') add('Billets de train / QR code enregistrés', AV, 'Train');
 
   /* --- Documents & argent (toujours) --- */
   add(abroad ? 'Passeport' : "Carte d'identité", 'Documents & argent');
@@ -302,18 +345,18 @@ function generateItems(trip, wflags) {
     add('Adaptateur de prise', 'Électronique', 'Prises différentes à l’étranger');
   }
 
-  /* --- Vêtements (selon durée + météo) --- */
-  add('Sous-vêtements · ' + qty(days, 1, 12) + '/pers.', 'Vêtements');
-  add('Chaussettes · ' + qty(days, 1, 12) + '/pers.', 'Vêtements');
+  /* --- Vêtements (selon durée + météo + nombre de personnes) --- */
+  add(qtyLabel('Sous-vêtements', days, 1, 12, clothingPeople), 'Vêtements');
+  add(qtyLabel('Chaussettes', days, 1, 12, clothingPeople), 'Vêtements');
   add('Pyjama', 'Vêtements');
   add('Tenue confortable pour voyager', 'Vêtements');
   if (f.hot || f.warm) {
-    add('T-shirts · ' + qty(days, 0.8, 10) + '/pers.', 'Vêtements', 'Il va faire chaud');
-    add('Short / jupe · ' + qty(days, 0.5, 5) + '/pers.', 'Vêtements', 'Il va faire chaud');
+    add(qtyLabel('T-shirts', days, 0.8, 10, clothingPeople), 'Vêtements', 'Il va faire chaud');
+    add(qtyLabel('Short / jupe', days, 0.5, 5, clothingPeople), 'Vêtements', 'Il va faire chaud');
     add('Vêtements légers et respirants', 'Vêtements');
   } else {
-    add('Hauts / pulls · ' + qty(days, 0.6, 8) + '/pers.', 'Vêtements');
-    add('Pantalons · ' + qty(days, 0.35, 4) + '/pers.', 'Vêtements');
+    add(qtyLabel('Hauts / pulls', days, 0.6, 8, clothingPeople), 'Vêtements');
+    add(qtyLabel('Pantalons', days, 0.35, 4, clothingPeople), 'Vêtements');
   }
   if (f.hot) {
     add('Casquette / chapeau', 'Vêtements', 'Forte chaleur / soleil');
@@ -348,6 +391,10 @@ function generateItems(trip, wflags) {
     add('Crème solaire', 'Toilette & santé', 'Exposition au soleil');
   }
   if (people >= 2) add('Nécessaire de rasage / épilation', 'Toilette & santé');
+  if (transport === 'avion') {
+    add('Liquides ≤ 100 ml dans un sac transparent', 'Toilette & santé', 'Contrôle cabine avion');
+    add('Médicaments en cabine avec ordonnance', 'Toilette & santé', 'Vol');
+  }
 
   /* --- Électronique (toujours) --- */
   add('Téléphone', 'Électronique');
@@ -355,10 +402,13 @@ function generateItems(trip, wflags) {
   add('Batterie externe', 'Électronique');
   add('Écouteurs / casque', 'Électronique');
   if (nights >= 3) add('Multiprise / chargeur multiple', 'Électronique');
+  if (transport === 'avion') {
+    add('Batterie externe en bagage cabine (interdite en soute)', 'Électronique', 'Règle avion');
+  }
 
   /* --- Par type de voyage --- */
   if (has('plage')) {
-    add('Maillot de bain · ' + qty(days, 0.3, 3) + '/pers.', 'Plage');
+    add(qtyLabel('Maillot de bain', days, 0.3, 3, clothingPeople), 'Plage');
     add('Serviette de plage', 'Plage');
     add('Tongs / claquettes', 'Plage');
     add('Lunettes de soleil', 'Plage');
@@ -420,6 +470,40 @@ function generateItems(trip, wflags) {
     add('Cartes de visite', 'Business');
     add('Documents / dossiers de travail', 'Business');
     add('Bloc-notes + stylo', 'Business');
+  }
+  if (has('croisiere')) {
+    add('Documents d’embarquement de la croisière', 'Documents & argent');
+    add('Médicaments contre le mal de mer', 'Toilette & santé', 'Croisière');
+    add('Tenue habillée pour les dîners', 'Vêtements', 'Croisière');
+    add('Maillot de bain', 'Divers', 'Croisière');
+    add('Petit sac pour les escales / excursions', 'Divers');
+    add('Chaussures de pont antidérapantes', 'Vêtements');
+  }
+  if (has('festival')) {
+    add('Billets / bracelet du festival', 'Documents & argent', 'Festival');
+    add('Bouchons d’oreilles', 'Divers', 'Festival');
+    add('Poncho / K-way de pluie', 'Divers', 'Festival');
+    add('Batterie externe grande capacité', 'Électronique', 'Festival');
+    add('Chaussures fermées confortables', 'Vêtements', 'Festival');
+    add('Un peu d’espèces (paiement sur place)', 'Documents & argent');
+    add('Gourde vide (remplissage sur place)', 'Divers');
+    add('Lingettes + gel hydroalcoolique', 'Toilette & santé');
+  }
+  if (has('bienetre')) {
+    add('Maillot de bain (spa / thermes)', 'Divers', 'Bien-être');
+    add('Tongs / claquettes', 'Divers', 'Bien-être');
+    add('Peignoir (si non fourni)', 'Vêtements');
+    add('Bonnet de bain', 'Divers');
+    add('Tenue de détente confortable', 'Vêtements');
+    add('Crème hydratante / soins', 'Toilette & santé');
+    add('Livre / carnet', 'Divers');
+  }
+  if (transport === 'bateau' || has('croisiere')) {
+    add('Médicaments contre le mal de mer', 'Toilette & santé', 'Traversée en bateau');
+  }
+  if (transport === 'train') {
+    add('Billets de train / QR code', 'Documents & argent', 'Train');
+    add('Encas et boisson pour le trajet', 'Divers');
   }
 
   /* --- Enfants (selon âge) --- */
@@ -567,6 +651,7 @@ function newWizard(trip) {
       children: (trip.children || []).slice(),
       types: (trip.types || []).slice(),
       style: trip.style || '',
+      transport: trip.transport || '',
     };
     return;
   }
@@ -584,6 +669,7 @@ function newWizard(trip) {
     children: [],  // âges
     types: [],
     style: '',
+    transport: '',
   };
 }
 const WSTEPS = 3;
@@ -699,6 +785,14 @@ function stepTypeStyle(w) {
   </div>
   <div class="card">
     <div class="field">
+      <label>Comment voyages-tu ? <span style="color:var(--muted);font-weight:400">(optionnel)</span></label>
+      <div class="hint">Pour adapter la liste (règles avion, plein d’essence, billets…).</div>
+      <div class="chips">${TRANSPORTS.map(t =>
+        `<button class="chip ${w.transport === t.id ? 'on' : ''}" data-transport="${t.id}">${t.emoji} ${t.label}</button>`).join('')}</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="field">
       <label>Style de voyage <span style="color:var(--muted);font-weight:400">(optionnel)</span></label>
       <div class="chips">${TRIP_STYLES.map(s =>
         `<button class="chip ${w.style === s.id ? 'on' : ''}" data-style="${s.id}">${s.emoji} ${s.label}</button>`).join('')}</div>
@@ -714,9 +808,17 @@ function stepValid(w) {
 }
 
 /* ---------- TRIP (checklist) ---------- */
+let tripUi = { id: null, expanded: {} }; // catégories dépliées à la main (état d'affichage, non sauvegardé)
+
 function renderTrip() {
   const t = state.trips.find(x => x.id === route.tripId);
   if (!t) { route = { name: 'home' }; return render(); }
+
+  // Nouveau voyage à l'écran : on repart d'un état d'affichage neuf.
+  if (tripUi.id !== t.id) tripUi = { id: t.id, expanded: {} };
+
+  // Rafraîchissement de la météo en tâche de fond si elle est ancienne (ne bloque pas le rendu).
+  maybeRefreshWeather(t);
 
   const total = t.items.length;
   const done = t.items.filter(i => i.checked).length;
@@ -754,7 +856,12 @@ function renderTrip() {
   cats.forEach(cat => {
     const list = byCat[cat];
     const d = list.filter(i => i.checked).length;
-    html += `<div class="cat-title">${esc(cat)} <span class="cat-n">${d}/${list.length}</span></div>`;
+    // Catégorie entièrement cochée : repliée par défaut (dépliable au tap).
+    const allDone = list.length > 0 && d === list.length;
+    const collapsed = allDone && !tripUi.expanded[cat];
+    html += `<div class="cat-title ${allDone ? 'clickable' : ''} ${collapsed ? 'collapsed' : ''}" ${allDone ? `data-cat="${esc(cat)}"` : ''}>
+      ${allDone ? `<span class="caret">${collapsed ? '▸' : '▾'}</span>` : ''}${esc(cat)} <span class="cat-n">${allDone ? '✓ ' : ''}${d}/${list.length}</span></div>`;
+    if (collapsed) return;
     html += list.map(i => `<div class="item ${i.checked ? 'done' : ''}" data-item="${i.id}">
       <div class="chk" data-toggle="${i.id}">✓</div>
       <div class="lbl" data-edit="${i.id}">${esc(i.label)}${i.why ? `<span class="why">${esc(i.why)}</span>` : ''}</div>
@@ -765,13 +872,44 @@ function renderTrip() {
   elView().innerHTML = html;
 }
 
+/* Rafraîchit la météo d'un voyage à venir si elle est ancienne (> 6 h).
+   Met à jour uniquement le bandeau, jamais la liste (on ne touche pas aux objets cochés
+   ou ajoutés à la main). Prévient si la prévision est devenue disponible. */
+const weatherRefreshing = {};
+const WEATHER_MAX_AGE = 6 * 3600 * 1000;
+async function maybeRefreshWeather(t) {
+  if (!t || !t.lat || !t.lon) return;
+  if (parseISO(t.endDate) < parseISO(todayISO())) return;      // voyage passé : inutile
+  if (Date.now() - (t.weatherAt || 0) < WEATHER_MAX_AGE) return; // encore fraîche
+  if (weatherRefreshing[t.id]) return;                          // déjà en cours
+  weatherRefreshing[t.id] = true;
+  const prevSource = t.weather && t.weather.source;
+  try {
+    const w = await getWeather(t.lat, t.lon, t.startDate, t.endDate);
+    if (!w || w.error) return;
+    t.weather = w;
+    t.weatherAt = Date.now();
+    save();
+    if (route.name === 'trip' && route.tripId === t.id) {
+      renderTrip();
+      if (prevSource && prevSource !== 'forecast' && w.source === 'forecast') {
+        toast('Météo mise à jour · pense à régénérer la liste si besoin');
+      }
+    }
+  } catch (e) {
+    /* réseau indisponible : on garde la météo précédente */
+  } finally {
+    weatherRefreshing[t.id] = false;
+  }
+}
+
 /* -------------------------------------------------------------------------
    7. ÉVÉNEMENTS (délégation)
    ------------------------------------------------------------------------- */
 function go(name, tripId) { route = { name, tripId: tripId || null }; render(); }
 
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-open],[data-geo],[data-type],[data-style],[data-adj],[data-toggle],[data-del],[data-edit],#fab-new,#w-back,#w-next,#w-prev,#geo-search,#geo-clear,#t-back,#t-menu,#add-btn,#h-settings');
+  const el = e.target.closest('[data-open],[data-geo],[data-type],[data-style],[data-transport],[data-adj],[data-toggle],[data-del],[data-edit],[data-cat],#fab-new,#w-back,#w-next,#w-prev,#geo-search,#geo-clear,#t-back,#t-menu,#add-btn,#h-settings');
   if (!el) return;
 
   // --- Accueil ---
@@ -830,10 +968,20 @@ document.addEventListener('click', async (e) => {
     wizard.style = (wizard.style === id) ? '' : id;
     return renderWizard();
   }
+  if (el.hasAttribute('data-transport')) {
+    const id = el.getAttribute('data-transport');
+    wizard.transport = (wizard.transport === id) ? '' : id;
+    return renderWizard();
+  }
 
   // --- Checklist ---
   if (el.id === 't-back') return go('home');
   if (el.id === 't-menu') return openTripMenu();
+  if (el.hasAttribute('data-cat')) {
+    const cat = el.getAttribute('data-cat');
+    tripUi.expanded[cat] = !tripUi.expanded[cat];
+    return renderTrip();
+  }
   if (el.hasAttribute('data-toggle')) {
     const t = state.trips.find(x => x.id === route.tripId);
     const it = t.items.find(i => i.id === el.getAttribute('data-toggle'));
@@ -926,7 +1074,8 @@ async function finishWizard() {
         lat: w.place.lat, lon: w.place.lon,
         startDate: w.startDate, endDate: w.endDate,
         adults: w.adults, children: w.children.slice(),
-        types: w.types.slice(), style: w.style, weather,
+        types: w.types.slice(), style: w.style, transport: w.transport,
+        weather, weatherAt: Date.now(),
       });
       trip.items = mergeItems(oldItems, generateItems(trip, wv.flags));
       save();
@@ -951,7 +1100,9 @@ async function finishWizard() {
     children: w.children.slice(),
     types: w.types.slice(),
     style: w.style,
+    transport: w.transport,
     weather,
+    weatherAt: Date.now(),
     createdAt: Date.now(),
     items: [],
   };
@@ -1007,7 +1158,7 @@ function openTripMenu() {
     closeSheet();
     if (!confirm('Régénérer la liste ? Les objets ajoutés à la main et les cases cochées seront réinitialisés.')) return;
     elView().innerHTML = `<div class="card"><div class="spinner"></div><p class="center-msg">Régénération…</p></div>`;
-    try { t.weather = await getWeather(t.lat, t.lon, t.startDate, t.endDate); }
+    try { t.weather = await getWeather(t.lat, t.lon, t.startDate, t.endDate); t.weatherAt = Date.now(); }
     catch (e) { t.weather = { error: true }; }
     const wv = weatherView(t.weather);
     t.items = mergeItems(t.items, generateItems(t, wv.flags));

@@ -331,6 +331,9 @@ input:focus, select:focus { outline: 2px solid var(--teal); outline-offset: 0; b
   margin: 20px 4px 8px;
 }
 .cat-title .cat-n { font-weight: 500; opacity: .8; }
+.cat-title.clickable { cursor: pointer; }
+.cat-title .caret { font-size: 11px; opacity: .7; }
+.cat-title.collapsed { opacity: .6; margin-bottom: 8px; }
 
 .item {
   display: flex;

@@ -7,7 +7,7 @@
 /* -------------------------------------------------------------------------
    1. STOCKAGE LOCAL
    ------------------------------------------------------------------------- */
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 const STORE_KEY = 'valise.v1';
 const BACKUP_KEY = 'valise.backup'; // sauvegarde automatique de secours
 
@@ -613,9 +613,13 @@ function mergeItems(oldItems, newItems) {
 const elView = () => document.getElementById('view');
 const elTop = () => document.getElementById('topbar');
 
-// Chemin de l'image de fond pour un type de voyage (photos embarquées, libres de droits).
+// Image de fond d'un voyage (photos embarquées, libres de droits).
+// Priorité au PAYS de la destination ; à défaut, photo du TYPE de voyage.
 const TYPE_BG = { plage:1, montagne:1, ville:1, roadtrip:1, camping:1, ski:1, rando:1, business:1, croisiere:1, festival:1, bienetre:1 };
+const COUNTRY_BG = { fr:1, es:1, it:1, gb:1, de:1, nl:1, ch:1, gr:1, pt:1, tr:1, ma:1, eg:1, us:1, ca:1, mx:1, jp:1, th:1, id:1 };
 function tripBg(trip) {
+  const cc = (trip.countryCode || '').toLowerCase();
+  if (COUNTRY_BG[cc]) return 'img/pays-' + cc + '.jpg';
   const t = trip.types && trip.types.find(x => TYPE_BG[x]);
   return 'img/bg-' + (t || 'home') + '.jpg';
 }

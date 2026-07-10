@@ -7,7 +7,9 @@
 /* -------------------------------------------------------------------------
    1. STOCKAGE LOCAL
    ------------------------------------------------------------------------- */
+const APP_VERSION = 'v2';
 const STORE_KEY = 'valise.v1';
+const BACKUP_KEY = 'valise.backup'; // sauvegarde automatique de secours
 
 let state = { trips: [] };
 let route = { name: 'home', tripId: null }; // home | wizard | trip
@@ -19,12 +21,38 @@ function load() {
     if (raw) state = JSON.parse(raw);
     if (!Array.isArray(state.trips)) state.trips = [];
   } catch (e) {
+    // Données principales illisibles : on tente la sauvegarde automatique.
+    if (restoreFromBackup()) return;
     state = { trips: [] };
   }
 }
 function save() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
-  catch (e) { toast('Sauvegarde impossible (stockage plein ?)'); }
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    // Sauvegarde automatique : copie horodatée du dernier état valide, filet
+    // de sécurité si le stockage principal est effacé ou corrompu.
+    try {
+      localStorage.setItem(BACKUP_KEY, JSON.stringify({ at: Date.now(), version: APP_VERSION, data: state }));
+    } catch (e) { /* backup best-effort */ }
+  } catch (e) {
+    toast('Sauvegarde impossible (stockage plein ?)');
+  }
+}
+function readBackup() {
+  try {
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if (!raw) return null;
+    const b = JSON.parse(raw);
+    if (b && b.data && Array.isArray(b.data.trips)) return b;
+  } catch (e) { /* backup illisible */ }
+  return null;
+}
+function restoreFromBackup() {
+  const b = readBackup();
+  if (!b) return false;
+  state = b.data;
+  if (!Array.isArray(state.trips)) state.trips = [];
+  return true;
 }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
@@ -57,6 +85,12 @@ function humanRange(a, b) {
   if (da.getFullYear() !== db.getFullYear())
     return humanDate(a) + ' ' + da.getFullYear() + ' → ' + humanDate(b) + ' ' + db.getFullYear();
   return humanDate(a) + ' → ' + humanDate(b) + ' ' + db.getFullYear();
+}
+function humanDateTime(ms) {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return d.getDate() + ' ' + MOIS[d.getMonth()] + ' à ' + hh + 'h' + mm;
 }
 
 /* -------------------------------------------------------------------------
@@ -448,6 +482,23 @@ function generateItems(trip, wflags) {
   return items;
 }
 
+/* Fusionne une liste régénérée avec l'ancienne pour ne rien perdre :
+   - conserve l'état coché des objets qui existent toujours (repérés par leur nom) ;
+   - garde les objets ajoutés ou modifiés à la main (custom) absents de la nouvelle liste. */
+function mergeItems(oldItems, newItems) {
+  const oldByKey = {};
+  (oldItems || []).forEach(i => { oldByKey[i.label.toLowerCase()] = i; });
+  const result = newItems.map(ni => {
+    const oi = oldByKey[ni.label.toLowerCase()];
+    return oi ? Object.assign({}, ni, { checked: oi.checked }) : ni;
+  });
+  const newKeys = new Set(newItems.map(i => i.label.toLowerCase()));
+  (oldItems || []).forEach(oi => {
+    if (oi.custom && !newKeys.has(oi.label.toLowerCase())) result.push(oi);
+  });
+  return result;
+}
+
 /* -------------------------------------------------------------------------
    6. RENDU — routeur simple
    ------------------------------------------------------------------------- */
@@ -466,7 +517,8 @@ function esc(s) {
 
 /* ---------- ACCUEIL ---------- */
 function renderHome() {
-  elTop().innerHTML = `<div class="tb-title">🧳 Valise<span class="tb-sub">Tes listes de voyage</span></div>`;
+  elTop().innerHTML = `<div class="tb-title">🧳 Valise<span class="tb-sub">Tes listes de voyage</span></div>
+    <button class="tb-action" id="h-settings" aria-label="Réglages">⚙️</button>`;
   const trips = state.trips.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
   let html = `<div class="hero"><h1>Prêt à partir ?</h1><p>Crée une liste personnalisée selon ta destination et la météo.</p></div>`;
@@ -494,9 +546,33 @@ function renderHome() {
 }
 
 /* ---------- WIZARD (formulaire en étapes) ---------- */
-function newWizard() {
+function newWizard(trip) {
+  if (trip) {
+    // Mode édition : on repart des données du voyage existant.
+    wizard = {
+      step: 0,
+      editId: trip.id,
+      name: trip.name || '',
+      destination: trip.destination || '',
+      place: {
+        name: trip.destination || trip.name, admin1: '',
+        country: trip.country || '', countryCode: trip.countryCode || '',
+        lat: trip.lat, lon: trip.lon,
+      },
+      geoResults: null,
+      geoLoading: false,
+      startDate: trip.startDate,
+      endDate: trip.endDate,
+      adults: trip.adults,
+      children: (trip.children || []).slice(),
+      types: (trip.types || []).slice(),
+      style: trip.style || '',
+    };
+    return;
+  }
   wizard = {
     step: 0,
+    editId: null,
     name: '',
     destination: '',
     place: null,   // {name, admin1, country, countryCode, lat, lon}
@@ -515,7 +591,7 @@ const WSTEPS = 3;
 function renderWizard() {
   const w = wizard;
   elTop().innerHTML = `<button class="tb-back" id="w-back">‹</button>
-    <div class="tb-title">Nouveau voyage<span class="tb-sub">Étape ${w.step + 1} sur ${WSTEPS}</span></div>`;
+    <div class="tb-title">${w.editId ? 'Modifier le voyage' : 'Nouveau voyage'}<span class="tb-sub">Étape ${w.step + 1} sur ${WSTEPS}</span></div>`;
 
   let body = `<div class="steps">` +
     Array.from({ length: WSTEPS }, (_, i) => `<i class="${i <= w.step ? 'done' : ''}"></i>`).join('') +
@@ -527,7 +603,7 @@ function renderWizard() {
 
   // Barre d'action
   const isLast = w.step === WSTEPS - 1;
-  const nextLabel = isLast ? '🧳 Générer ma liste' : 'Continuer';
+  const nextLabel = isLast ? (w.editId ? '✅ Enregistrer les modifications' : '🧳 Générer ma liste') : 'Continuer';
   const canNext = stepValid(w);
   body += `<div class="mt">
     <button class="btn btn-primary btn-block" id="w-next" ${canNext ? '' : 'disabled'}>${nextLabel}</button>
@@ -681,7 +757,7 @@ function renderTrip() {
     html += `<div class="cat-title">${esc(cat)} <span class="cat-n">${d}/${list.length}</span></div>`;
     html += list.map(i => `<div class="item ${i.checked ? 'done' : ''}" data-item="${i.id}">
       <div class="chk" data-toggle="${i.id}">✓</div>
-      <div class="lbl">${esc(i.label)}${i.why ? `<span class="why">${esc(i.why)}</span>` : ''}</div>
+      <div class="lbl" data-edit="${i.id}">${esc(i.label)}${i.why ? `<span class="why">${esc(i.why)}</span>` : ''}</div>
       <button class="del" data-del="${i.id}" aria-label="Supprimer">✕</button>
     </div>`).join('');
   });
@@ -695,11 +771,12 @@ function renderTrip() {
 function go(name, tripId) { route = { name, tripId: tripId || null }; render(); }
 
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-open],[data-geo],[data-type],[data-style],[data-adj],[data-toggle],[data-del],#fab-new,#w-back,#w-next,#w-prev,#geo-search,#geo-clear,#t-back,#t-menu,#add-btn');
+  const el = e.target.closest('[data-open],[data-geo],[data-type],[data-style],[data-adj],[data-toggle],[data-del],[data-edit],#fab-new,#w-back,#w-next,#w-prev,#geo-search,#geo-clear,#t-back,#t-menu,#add-btn,#h-settings');
   if (!el) return;
 
   // --- Accueil ---
   if (el.id === 'fab-new') { newWizard(); return go('wizard'); }
+  if (el.id === 'h-settings') return openSettings();
   if (el.hasAttribute('data-open')) return go('trip', el.getAttribute('data-open'));
 
   // --- Wizard navigation ---
@@ -769,6 +846,7 @@ document.addEventListener('click', async (e) => {
     save(); renderTrip();
     return;
   }
+  if (el.hasAttribute('data-edit')) return openItemEdit(el.getAttribute('data-edit'));
   if (el.id === 'add-btn') return addCustomItem();
 });
 
@@ -826,7 +904,7 @@ async function finishWizard() {
   const name = (w.name && w.name.trim()) || w.place.name;
 
   // Écran de chargement
-  elTop().innerHTML = `<div class="tb-title">Préparation…</div>`;
+  elTop().innerHTML = `<div class="tb-title">${w.editId ? 'Mise à jour…' : 'Préparation…'}</div>`;
   elView().innerHTML = `<div class="card"><div class="spinner"></div><p class="center-msg">On récupère la météo et on prépare ta liste…</p></div>`;
 
   let weather = null;
@@ -836,6 +914,28 @@ async function finishWizard() {
     weather = { error: true };
   }
   const wv = weatherView(weather);
+
+  // --- Mode édition : on met à jour le voyage et on fusionne la liste ---
+  if (w.editId) {
+    const trip = state.trips.find(x => x.id === w.editId);
+    if (trip) {
+      const oldItems = trip.items;
+      Object.assign(trip, {
+        name, destination: w.destination,
+        countryCode: w.place.countryCode, country: w.place.country,
+        lat: w.place.lat, lon: w.place.lon,
+        startDate: w.startDate, endDate: w.endDate,
+        adults: w.adults, children: w.children.slice(),
+        types: w.types.slice(), style: w.style, weather,
+      });
+      trip.items = mergeItems(oldItems, generateItems(trip, wv.flags));
+      save();
+      wizard = null;
+      go('trip', trip.id);
+      toast('Voyage mis à jour');
+      return;
+    }
+  }
 
   const trip = {
     id: uid(),
@@ -885,13 +985,17 @@ function openTripMenu() {
   const done = t.items.filter(i => i.checked).length;
   openSheet(`<h3>${esc(t.name)}</h3>
     <p class="center-msg" style="text-align:left;padding:0 0 6px">${esc(humanRange(t.startDate, t.endDate))} · ${esc(t.destination)}</p>
-    <button class="btn btn-block" id="m-uncheck">↺ Tout décocher (${done})</button>
+    <button class="btn btn-block" id="m-edit">✏️ Modifier le voyage</button>
+    <button class="btn btn-block mt" id="m-share">📤 Partager la liste</button>
+    <button class="btn btn-block mt" id="m-uncheck">↺ Tout décocher (${done})</button>
     <button class="btn btn-block mt" id="m-regen">🔄 Régénérer la liste</button>
     <button class="btn btn-block mt btn-danger" id="m-del">🗑️ Supprimer ce voyage</button>
     <button class="btn btn-ghost btn-block mt" id="m-close">Fermer</button>`);
 
   const bind = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
   bind('m-close', closeSheet);
+  bind('m-edit', () => { closeSheet(); newWizard(t); go('wizard'); });
+  bind('m-share', () => { closeSheet(); shareTrip(t); });
   bind('m-uncheck', () => { t.items.forEach(i => i.checked = false); save(); closeSheet(); renderTrip(); toast('Liste décochée'); });
   bind('m-del', () => {
     if (confirm('Supprimer définitivement « ' + t.name + ' » ?')) {
@@ -906,9 +1010,138 @@ function openTripMenu() {
     try { t.weather = await getWeather(t.lat, t.lon, t.startDate, t.endDate); }
     catch (e) { t.weather = { error: true }; }
     const wv = weatherView(t.weather);
-    t.items = generateItems(t, wv.flags);
+    t.items = mergeItems(t.items, generateItems(t, wv.flags));
     save(); renderTrip(); toast('Liste régénérée');
   });
+}
+
+/* ---------- Édition d'un objet (renommer + catégorie) ---------- */
+function openItemEdit(itemId) {
+  const t = state.trips.find(x => x.id === route.tripId);
+  if (!t) return;
+  const it = t.items.find(i => i.id === itemId);
+  if (!it) return;
+  const options = CATS.map(c => `<option value="${esc(c)}" ${c === it.cat ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  openSheet(`<h3>Modifier l’objet</h3>
+    <div class="field"><label>Nom</label><input type="text" id="ie-label" value="${esc(it.label)}" autocomplete="off" /></div>
+    <div class="field"><label>Catégorie</label><select id="ie-cat">${options}</select></div>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="ie-cancel">Annuler</button>
+      <button class="btn btn-primary" id="ie-save">Enregistrer</button>
+    </div>`);
+  const bind = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
+  bind('ie-cancel', closeSheet);
+  bind('ie-save', () => {
+    const label = document.getElementById('ie-label').value.trim();
+    if (!label) { toast('Le nom ne peut pas être vide'); return; }
+    it.label = label;
+    it.cat = document.getElementById('ie-cat').value;
+    it.custom = true; // objet touché à la main : on le conserve lors des régénérations
+    it.why = '';
+    save(); closeSheet(); renderTrip(); toast('Objet modifié');
+  });
+}
+
+/* ---------- Partage d'une liste ---------- */
+function tripToText(t) {
+  const lines = [];
+  lines.push('🧳 ' + t.name);
+  lines.push(humanRange(t.startDate, t.endDate) + (t.destination ? ' · ' + t.destination : ''));
+  const done = t.items.filter(i => i.checked).length;
+  lines.push(done + '/' + t.items.length + ' préparés');
+  lines.push('');
+  const byCat = {};
+  t.items.forEach(i => { (byCat[i.cat] = byCat[i.cat] || []).push(i); });
+  const cats = CATS.filter(c => byCat[c]).concat(Object.keys(byCat).filter(c => !CATS.includes(c)));
+  cats.forEach(cat => {
+    lines.push('— ' + cat + ' —');
+    byCat[cat].forEach(i => lines.push((i.checked ? '☑' : '☐') + ' ' + i.label));
+    lines.push('');
+  });
+  lines.push('Créé avec Valise');
+  return lines.join('\n');
+}
+
+async function shareTrip(t) {
+  const text = tripToText(t);
+  const title = 'Valise · ' + t.name;
+  if (navigator.share) {
+    try { await navigator.share({ title, text }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; /* sinon on tente le repli */ }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Liste copiée dans le presse-papier');
+  } catch (e) {
+    openSheet(`<h3>Partager la liste</h3>
+      <p class="sheet-note">Copie ce texte pour l’envoyer.</p>
+      <textarea class="share-area" readonly>${esc(text)}</textarea>
+      <button class="btn btn-ghost btn-block mt" id="sh-close">Fermer</button>`);
+    const b = document.getElementById('sh-close'); if (b) b.onclick = closeSheet;
+  }
+}
+
+/* ---------- Réglages & sauvegarde (export / import / restauration) ---------- */
+function openSettings() {
+  const b = readBackup();
+  const backupInfo = b
+    ? 'Dernière sauvegarde automatique : ' + humanDateTime(b.at) + '.'
+    : 'Aucune sauvegarde automatique pour l’instant.';
+  openSheet(`<h3>Réglages & sauvegarde</h3>
+    <p class="sheet-note">Tes voyages restent sur cet appareil. Exporte un fichier pour les sauvegarder ailleurs ou les transférer sur un autre téléphone.</p>
+    <button class="btn btn-block" id="s-export">⬇️ Exporter mes voyages (fichier)</button>
+    <label class="btn btn-block mt" for="s-import-file" style="cursor:pointer">⬆️ Importer une sauvegarde</label>
+    <input type="file" id="s-import-file" accept="application/json,.json" class="hidden" />
+    <button class="btn btn-block mt" id="s-restore" ${b ? '' : 'disabled'}>↺ Restaurer la sauvegarde automatique</button>
+    <p class="sheet-note">${esc(backupInfo)}</p>
+    <button class="btn btn-ghost btn-block mt" id="s-close">Fermer</button>
+    <p class="sheet-ver">Valise ${APP_VERSION}</p>`);
+  const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  bind('s-close', closeSheet);
+  bind('s-export', exportData);
+  bind('s-restore', () => {
+    if (restoreFromBackup()) { save(); closeSheet(); go('home'); toast('Sauvegarde automatique restaurée'); }
+    else toast('Aucune sauvegarde à restaurer');
+  });
+  const fileInput = document.getElementById('s-import-file');
+  if (fileInput) fileInput.onchange = (e) => { const f = e.target.files[0]; if (f) importData(f); };
+}
+
+function exportData() {
+  const payload = { app: 'valise', version: APP_VERSION, exportedAt: new Date().toISOString(), trips: state.trips };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'valise-sauvegarde-' + fmtISO(new Date()) + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('Sauvegarde exportée');
+}
+
+/* Import non destructif : ajoute les voyages absents (repérés par id), sans écraser. */
+function importData(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const trips = Array.isArray(data) ? data : (Array.isArray(data.trips) ? data.trips : null);
+      if (!trips) throw new Error('format');
+      const clean = trips.filter(t => t && t.id && Array.isArray(t.items));
+      if (!clean.length) throw new Error('vide');
+      const known = new Set(state.trips.map(t => t.id));
+      let added = 0;
+      clean.forEach(t => { if (!known.has(t.id)) { state.trips.push(t); added++; } });
+      save();
+      closeSheet();
+      go('home');
+      toast(added ? 'Importé · ' + added + ' voyage(s) ajouté(s)' : 'Rien à importer (déjà présents)');
+    } catch (e) {
+      toast('Fichier invalide');
+    }
+  };
+  reader.onerror = () => toast('Lecture du fichier impossible');
+  reader.readAsText(file);
 }
 
 /* -------------------------------------------------------------------------

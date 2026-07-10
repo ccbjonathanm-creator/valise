@@ -7,7 +7,7 @@
 /* -------------------------------------------------------------------------
    1. STOCKAGE LOCAL
    ------------------------------------------------------------------------- */
-const APP_VERSION = 'v4';
+const APP_VERSION = 'v5';
 const STORE_KEY = 'valise.v1';
 const BACKUP_KEY = 'valise.backup'; // sauvegarde automatique de secours
 
@@ -78,6 +78,11 @@ function nbNights(trip) { return Math.max(1, daysBetween(trip.startDate, trip.en
 function nbDaysInclusive(trip) { return nbNights(trip) + 1; }
 
 const MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+const JOURS = ['dim.', 'lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.'];
+function humanDayFull(iso) {
+  const d = parseISO(iso);
+  return JOURS[d.getDay()] + ' ' + d.getDate() + ' ' + MOIS[d.getMonth()];
+}
 function humanDate(iso) {
   const d = parseISO(iso);
   return d.getDate() + ' ' + MOIS[d.getMonth()];
@@ -226,6 +231,13 @@ async function getWeather(lat, lon, start, end) {
     if (typeof v.tmax === 'number') tmax = Math.max(tmax, v.tmax);
     if (typeof v.precip === 'number') { precipTotal += v.precip; if (v.precip >= 1) precipDays++; }
   }
+  const days = keys.slice().sort().map(k => ({
+    date: k,
+    tmin: byDate[k].tmin,
+    tmax: byDate[k].tmax,
+    precip: byDate[k].precip,
+  }));
+
   return {
     tmin: Math.round(tmin),
     tmax: Math.round(tmax),
@@ -233,6 +245,7 @@ async function getWeather(lat, lon, start, end) {
     precipTotal: Math.round(precipTotal),
     nDays: keys.length,
     source: usedForecast && !usedArchive ? 'forecast' : (usedForecast ? 'mixte' : 'archive'),
+    days,
   };
 }
 
@@ -270,6 +283,15 @@ function weatherView(w) {
     cls: w.source === 'forecast' ? '' : 'est',
     flags: { hot, warm, cold, cool, rainy },
   };
+}
+
+// Icône météo pour une seule journée (à partir de sa température et de sa pluie).
+function dayIcon(d) {
+  if (typeof d.precip === 'number' && d.precip >= 1) return '🌧️';
+  if (typeof d.tmax === 'number' && d.tmax >= 27) return '☀️';
+  if (typeof d.tmin === 'number' && d.tmin <= 5) return '❄️';
+  if (typeof d.tmax === 'number' && d.tmax >= 21) return '🌤️';
+  return '⛅';
 }
 
 /* -------------------------------------------------------------------------
@@ -834,9 +856,11 @@ function renderTrip() {
 
   let html = '';
   if (wv) {
-    html += `<div class="weather ${wv.cls}">
+    const clickable = !wv.cls || wv.cls !== 'err';
+    html += `<div class="weather ${wv.cls} ${clickable ? 'tappable' : ''}" ${clickable ? 'id="weather-banner"' : ''}>
       <div class="w-ico">${wv.ico}</div>
       <div class="w-body"><div class="w-t">${esc(wv.title)}</div><div class="w-d">${esc(wv.desc)}</div></div>
+      ${clickable ? `<div class="w-more">détail ›</div>` : ''}
     </div>`;
   }
 
@@ -911,7 +935,7 @@ async function maybeRefreshWeather(t) {
 function go(name, tripId) { route = { name, tripId: tripId || null }; render(); }
 
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-open],[data-geo],[data-type],[data-style],[data-transport],[data-adj],[data-toggle],[data-del],[data-edit],[data-cat],#fab-new,#w-back,#w-next,#w-prev,#geo-search,#geo-clear,#t-back,#t-menu,#add-btn,#h-settings');
+  const el = e.target.closest('[data-open],[data-geo],[data-type],[data-style],[data-transport],[data-adj],[data-toggle],[data-del],[data-edit],[data-cat],#fab-new,#w-back,#w-next,#w-prev,#geo-search,#geo-clear,#t-back,#t-menu,#add-btn,#h-settings,#weather-banner');
   if (!el) return;
 
   // --- Accueil ---
@@ -979,6 +1003,11 @@ document.addEventListener('click', async (e) => {
   // --- Checklist ---
   if (el.id === 't-back') return go('home');
   if (el.id === 't-menu') return openTripMenu();
+  if (el.id === 'weather-banner') {
+    const t = state.trips.find(x => x.id === route.tripId);
+    if (t) openWeatherDetail(t);
+    return;
+  }
   if (el.hasAttribute('data-cat')) {
     const cat = el.getAttribute('data-cat');
     tripUi.expanded[cat] = !tripUi.expanded[cat];
@@ -1193,6 +1222,41 @@ function openItemEdit(itemId) {
     it.why = '';
     save(); closeSheet(); renderTrip(); toast('Objet modifié');
   });
+}
+
+/* ---------- Détail météo jour par jour ---------- */
+async function openWeatherDetail(t) {
+  let w = t.weather;
+  // Ancienne météo enregistrée sans le détail : on retente une récupération.
+  if (!w || !w.days || !w.days.length) {
+    openSheet(`<h3>Météo jour par jour</h3><div class="spinner"></div><p class="center-msg">Chargement…</p>`);
+    try {
+      const fresh = await getWeather(t.lat, t.lon, t.startDate, t.endDate);
+      if (fresh && !fresh.error) { t.weather = fresh; t.weatherAt = Date.now(); save(); w = fresh; }
+    } catch (e) { /* réseau indisponible */ }
+  }
+  if (!w || w.error || !w.days || !w.days.length) {
+    closeSheet();
+    toast('Détail météo indisponible (connexion ?)');
+    return;
+  }
+  const rows = w.days.map(d => {
+    const tmax = typeof d.tmax === 'number' ? Math.round(d.tmax) + '°' : '–';
+    const tmin = typeof d.tmin === 'number' ? Math.round(d.tmin) + '°' : '–';
+    const rain = (typeof d.precip === 'number' && d.precip >= 1)
+      ? `<span class="wd-rain">☔ ${Math.round(d.precip)} mm</span>` : '';
+    return `<div class="wd-row">
+      <div class="wd-ico">${dayIcon(d)}</div>
+      <div class="wd-day">${esc(humanDayFull(d.date))}</div>
+      <div class="wd-temp"><b>${tmax}</b> <span class="wd-min">${tmin}</span></div>
+      <div class="wd-p">${rain}</div>
+    </div>`;
+  }).join('');
+  openSheet(`<h3>Météo jour par jour</h3>
+    <p class="sheet-note">${esc(weatherView(w).desc)}</p>
+    <div class="wd-list">${rows}</div>
+    <button class="btn btn-ghost btn-block mt" id="wd-close">Fermer</button>`);
+  const b = document.getElementById('wd-close'); if (b) b.onclick = closeSheet;
 }
 
 /* ---------- Partage d'une liste ---------- */

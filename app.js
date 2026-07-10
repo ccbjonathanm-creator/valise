@@ -7,13 +7,15 @@
 /* -------------------------------------------------------------------------
    1. STOCKAGE LOCAL
    ------------------------------------------------------------------------- */
-const APP_VERSION = 'v3';
+const APP_VERSION = 'v4';
 const STORE_KEY = 'valise.v1';
 const BACKUP_KEY = 'valise.backup'; // sauvegarde automatique de secours
 
 let state = { trips: [] };
 let route = { name: 'home', tripId: null }; // home | wizard | trip
 let wizard = null; // brouillon en cours de création
+let swReg = null;        // registration du service worker (pour la mise à jour manuelle)
+let updateReady = false; // une nouvelle version est installée et prête à prendre la main
 
 function load() {
   try {
@@ -1245,10 +1247,14 @@ function openSettings() {
     <input type="file" id="s-import-file" accept="application/json,.json" class="hidden" />
     <button class="btn btn-block mt" id="s-restore" ${b ? '' : 'disabled'}>↺ Restaurer la sauvegarde automatique</button>
     <p class="sheet-note">${esc(backupInfo)}</p>
+    <hr class="sep" />
+    <button class="btn btn-block ${updateReady ? 'btn-primary' : ''}" id="s-update">${updateReady ? '⬇️ Installer la nouvelle version' : '🔄 Mettre à jour l’appli'}</button>
+    <p class="sheet-note">🔒 Une mise à jour n’efface jamais tes voyages. Elle ne remplace que l’application.</p>
     <button class="btn btn-ghost btn-block mt" id="s-close">Fermer</button>
     <p class="sheet-ver">Valise ${APP_VERSION}</p>`);
   const bind = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
   bind('s-close', closeSheet);
+  bind('s-update', doAppUpdate);
   bind('s-export', exportData);
   bind('s-restore', () => {
     if (restoreFromBackup()) { save(); closeSheet(); go('home'); toast('Sauvegarde automatique restaurée'); }
@@ -1321,13 +1327,61 @@ function toast(msg) {
 }
 
 /* -------------------------------------------------------------------------
-   10. DÉMARRAGE
+   11. MISE À JOUR DE L'APPLI (service worker, comme Coffre)
+   ------------------------------------------------------------------------- */
+// Une nouvelle version est prête : on l'indique et on rafraîchit la feuille Réglages si ouverte.
+function markUpdateReady() {
+  updateReady = true;
+  if (document.getElementById('s-update')) openSettings(); // la feuille est ouverte : on la réaffiche
+}
+
+// Mise à jour à toute épreuve : active le nouveau worker, VIDE le cache du code (jamais les
+// voyages, qui sont en localStorage), puis recharge du réseau. Impossible de rester bloqué.
+let updating = false;
+async function doAppUpdate() {
+  if (updating) return;
+  updating = true;
+  toast('Mise à jour…');
+  try {
+    if (swReg) {
+      await swReg.update();
+      if (swReg.waiting) swReg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    }
+  } catch (e) { /* hors-ligne : on tente quand même le rechargement */ }
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((k) => caches.delete(k)));
+  } catch (e) { /* ignore */ }
+  setTimeout(() => location.reload(), 500);
+}
+
+/* -------------------------------------------------------------------------
+   12. DÉMARRAGE
    ------------------------------------------------------------------------- */
 load();
 render();
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js').then((reg) => {
+    swReg = reg;
+    reg.update();
+    if (reg.waiting && navigator.serviceWorker.controller) markUpdateReady();
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener('statechange', () => {
+        if (nw.state === 'installed' && navigator.serviceWorker.controller) markUpdateReady();
+      });
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update();
+    });
+  }).catch(() => {});
+  // Quand un nouveau service worker prend la main, on recharge une fois.
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    location.reload();
   });
 }

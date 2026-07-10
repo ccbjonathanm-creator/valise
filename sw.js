@@ -1,6 +1,6 @@
 /* Valise — service worker : met l'app en cache pour un fonctionnement hors-ligne.
    Les appels météo (Open-Meteo) ne sont jamais mis en cache : ils partent toujours au réseau. */
-const CACHE = 'valise-v5';
+const CACHE = 'valise-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +11,18 @@ const ASSETS = [
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
   './icons/favicon-64.png',
+  './img/bg-home.jpg',
+  './img/bg-plage.jpg',
+  './img/bg-montagne.jpg',
+  './img/bg-ville.jpg',
+  './img/bg-roadtrip.jpg',
+  './img/bg-camping.jpg',
+  './img/bg-ski.jpg',
+  './img/bg-rando.jpg',
+  './img/bg-business.jpg',
+  './img/bg-croisiere.jpg',
+  './img/bg-festival.jpg',
+  './img/bg-bienetre.jpg',
 ];
 
 self.addEventListener('install', (e) => {

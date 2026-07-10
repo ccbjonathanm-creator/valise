@@ -7,7 +7,7 @@
 /* -------------------------------------------------------------------------
    1. STOCKAGE LOCAL
    ------------------------------------------------------------------------- */
-const APP_VERSION = 'v5';
+const APP_VERSION = 'v6';
 const STORE_KEY = 'valise.v1';
 const BACKUP_KEY = 'valise.backup'; // sauvegarde automatique de secours
 
@@ -613,7 +613,15 @@ function mergeItems(oldItems, newItems) {
 const elView = () => document.getElementById('view');
 const elTop = () => document.getElementById('topbar');
 
+// Chemin de l'image de fond pour un type de voyage (photos embarquées, libres de droits).
+const TYPE_BG = { plage:1, montagne:1, ville:1, roadtrip:1, camping:1, ski:1, rando:1, business:1, croisiere:1, festival:1, bienetre:1 };
+function tripBg(trip) {
+  const t = trip.types && trip.types.find(x => TYPE_BG[x]);
+  return 'img/bg-' + (t || 'home') + '.jpg';
+}
+
 function render() {
+  elTop().style.backgroundImage = ''; // réinitialise le fond photo (remis par renderTrip)
   if (route.name === 'home') return renderHome();
   if (route.name === 'wizard') return renderWizard();
   if (route.name === 'trip') return renderTrip();
@@ -638,7 +646,7 @@ function renderHome() {
       const total = t.items.length;
       const done = t.items.filter(i => i.checked).length;
       const pct = total ? Math.round(done / total * 100) : 0;
-      return `<div class="card trip-card" data-open="${t.id}">
+      return `<div class="card trip-card" data-open="${t.id}" style="background-image:url('${tripBg(t)}')">
         <div class="tc-emoji">${tripEmoji(t)}</div>
         <div class="tc-body">
           <div class="tc-name">${esc(t.name)}</div>
@@ -851,6 +859,8 @@ function renderTrip() {
   elTop().innerHTML = `<button class="tb-back" id="t-back">‹</button>
     <div class="tb-title">${esc(t.name)}<span class="tb-sub">${esc(humanRange(t.startDate, t.endDate))}</span></div>
     <button class="tb-action" id="t-menu">⋯</button>`;
+  // Fond photo du type de voyage, sous le dégradé teal semi-transparent.
+  elTop().style.backgroundImage = `linear-gradient(135deg, rgba(13,148,136,.72), rgba(15,118,110,.86)), url('${tripBg(t)}')`;
 
   const wv = t.weather ? weatherView(t.weather) : null;
 

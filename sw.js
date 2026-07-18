@@ -1,6 +1,6 @@
 /* Valise — service worker : met l'app en cache pour un fonctionnement hors-ligne.
    Les appels météo (Open-Meteo) ne sont jamais mis en cache : ils partent toujours au réseau. */
-const CACHE = 'valise-v10';
+const CACHE = 'valise-v11';
 const ASSETS = [
   './',
   './index.html',

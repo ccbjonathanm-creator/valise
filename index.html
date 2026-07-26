@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <!-- Sécurité : interdit tout code distant (script) et limite les connexions au strict nécessaire.
        Même si un contenu malveillant était injecté, le navigateur refuserait de l'exécuter. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://geocoding-api.open-meteo.com https://api.open-meteo.com https://archive-api.open-meteo.com; base-uri 'none'; frame-ancestors 'none'; object-src 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://geocoding-api.open-meteo.com https://api.open-meteo.com https://archive-api.open-meteo.com https://cloud.umami.is; base-uri 'none'; frame-ancestors 'none'; object-src 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0d9488" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -32,5 +32,6 @@
 
   <script src="app.js"></script>
   <script src="install-pwa.js" data-app-name="Valise" data-accent="#0d9488"></script>
+  <script src="mesure.js" data-app="valise" defer></script>
 </body>
 </html>

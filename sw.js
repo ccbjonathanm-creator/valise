@@ -1,10 +1,11 @@
 /* Valise — service worker : met l'app en cache pour un fonctionnement hors-ligne.
    Les appels météo (Open-Meteo) ne sont jamais mis en cache : ils partent toujours au réseau. */
-const CACHE = 'valise-v12';
+const CACHE = 'valise-v13';
 const ASSETS = [
   './mesure.js',
   './',
   './index.html',
+  './garde-style.js',
   './styles.css',
   './app.js',
   './manifest.webmanifest',
@@ -77,17 +78,21 @@ self.addEventListener('fetch', (e) => {
     // resservir un ancien app.js et bloquer la mise à jour. Le cache SW sert de secours hors-ligne.
     e.respondWith(
       fetch(e.request, { cache: 'no-store' }).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+        }
         return res;
-      }).catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
+      }).catch(() => caches.match(e.request).then((hit) => hit || (e.request.mode === 'navigate' ? caches.match('./index.html') : Response.error())))
     );
   } else {
     // Cache d'abord pour le reste (icônes) : figé.
     e.respondWith(
       caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+        }
         return res;
       }))
     );

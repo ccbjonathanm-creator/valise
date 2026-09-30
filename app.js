@@ -7,7 +7,7 @@
 /* -------------------------------------------------------------------------
    1. STOCKAGE LOCAL
    ------------------------------------------------------------------------- */
-const APP_VERSION = 'v8';
+const APP_VERSION = 'v9';
 const STORE_KEY = 'valise.v1';
 const BACKUP_KEY = 'valise.backup'; // sauvegarde automatique de secours
 
@@ -630,10 +630,41 @@ function tripBg(trip) {
 }
 
 function render() {
-  elTop().style.backgroundImage = ''; // réinitialise le fond photo (remis par renderTrip)
-  if (route.name === 'home') return renderHome();
-  if (route.name === 'wizard') return renderWizard();
-  if (route.name === 'trip') return renderTrip();
+  elTop().style.backgroundImage = '';
+  if (route.name === 'home') renderHome();
+  else if (route.name === 'wizard') renderWizard();
+  else if (route.name === 'trip') renderTrip();
+}
+
+/* Scène WebGL (fx.js) : globe, arcs de vol, ciel météo. Sans WebGL, ces appels ne font rien. */
+const FX = window.ValiseFX || { anchor() {}, scene() {}, focus() {}, trips() {}, mood() {}, burst() {}, celebrate() {} };
+function fxTrips(extra) {
+  const list = state.trips.filter(t => typeof t.lat === 'number').map(t => ({ id: t.id, lat: t.lat, lon: t.lon }));
+  if (extra) list.push(extra);
+  FX.trips(list);
+}
+function fxAnchor() { FX.anchor(document.querySelector('[data-globe]')); }
+
+// Ambiance du ciel selon la météo du voyage (mêmes seuils que le bandeau météo).
+function weatherMood(t) {
+  const w = t.weather;
+  if (!w || w.error) return 'mild';
+  const rainy = w.precipDays >= Math.max(1, Math.ceil(w.nDays * 0.35)) || w.precipTotal >= 15;
+  if ((t.types || []).includes('ski') || w.tmax <= 3) return 'snow';
+  if (rainy) return 'rain';
+  if (w.tmax >= 25) return 'sun';
+  if (w.tmax < 14) return 'cloud';
+  return 'mild';
+}
+
+// Compte à rebours avant le départ.
+function countdown(t) {
+  const today = todayISO();
+  const n = daysBetween(today, t.startDate);
+  if (n > 0) return { big: 'J-' + n, lbl: n === 1 ? 'départ demain' : 'avant le départ', cls: '' };
+  if (n === 0) return { big: 'Jour J', lbl: 'bon voyage', cls: '' };
+  if (daysBetween(today, t.endDate) >= 0) return { big: 'En route', lbl: 'voyage en cours', cls: '' };
+  return { big: 'Souvenir', lbl: 'voyage terminé', cls: 'past' };
 }
 
 function esc(s) {
@@ -642,11 +673,26 @@ function esc(s) {
 
 /* ---------- ACCUEIL ---------- */
 function renderHome() {
-  elTop().innerHTML = `<div class="tb-title">🧳 Valise<span class="tb-sub">Tes listes de voyage</span></div>
+  elTop().innerHTML = `<div class="tb-title"><span class="brand-mark">🧳</span>Valise</div>
     <button class="tb-action" id="h-settings" aria-label="Réglages">⚙️</button>`;
   const trips = state.trips.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-  let html = `<div class="hero"><h1>Prêt à partir ?</h1><p>Crée une liste personnalisée selon ta destination et la météo.</p></div>`;
+  const nbItems = trips.reduce((n, t) => n + t.items.length, 0);
+  const nbDone = trips.reduce((n, t) => n + t.items.filter(i => i.checked).length, 0);
+  const nbCountries = new Set(trips.map(t => t.countryCode).filter(Boolean)).size;
+  let html = `<div class="hero">
+    <div class="hero-globe" data-globe="0.47"></div>
+    <span class="kicker">Liste intelligente · météo réelle</span>
+    <h1>Prêt à partir ?</h1>
+    <p>Ta destination, la météo prévue, tes voyageurs : ta valise se prépare toute seule.</p>
+  </div>`;
+  if (trips.length) {
+    html += `<div class="stats">
+      <div class="stat"><b>${trips.length}</b><span>voyage${trips.length > 1 ? 's' : ''}</span></div>
+      <div class="stat"><b>${nbCountries || 1}</b><span>pays</span></div>
+      <div class="stat"><b>${nbDone}/${nbItems}</b><span>préparés</span></div>
+    </div>`;
+  }
 
   if (!trips.length) {
     html += `<div class="empty"><div class="big">🏝️</div><p>Aucune liste pour l’instant.<br>Appuie sur le bouton <b>+</b> pour créer ton premier voyage.</p></div>`;
@@ -655,7 +701,9 @@ function renderHome() {
       const total = t.items.length;
       const done = t.items.filter(i => i.checked).length;
       const pct = total ? Math.round(done / total * 100) : 0;
-      return `<div class="card trip-card" data-open="${t.id}" style="background-image:url('${tripBg(t)}')">
+      const cd = countdown(t);
+      return `<div class="card trip-card" data-open="${t.id}" data-tilt style="background-image:url('${tripBg(t)}')">
+        <div class="tc-when ${cd.cls}">${esc(cd.big)}</div>
         <div class="tc-emoji">${tripEmoji(t)}</div>
         <div class="tc-body">
           <div class="tc-name">${esc(t.name)}</div>
@@ -667,7 +715,13 @@ function renderHome() {
     }).join('');
   }
 
+  html += `<a class="credit" href="https://generationapp.fr" target="_blank" rel="noopener">Appli gratuite conçue par <b>Génération App</b></a>`;
   elView().innerHTML = html + `<button class="fab" id="fab-new" aria-label="Nouveau voyage">＋</button>`;
+
+  fxTrips();
+  FX.scene('home');
+  FX.focus(null);
+  fxAnchor();
 }
 
 /* ---------- WIZARD (formulaire en étapes) ---------- */
@@ -720,7 +774,11 @@ function renderWizard() {
   elTop().innerHTML = `<button class="tb-back" id="w-back">‹</button>
     <div class="tb-title">${w.editId ? 'Modifier le voyage' : 'Nouveau voyage'}<span class="tb-sub">Étape ${w.step + 1} sur ${WSTEPS}</span></div>`;
 
-  let body = `<div class="steps">` +
+  const pl = w.place;
+  let body = `<div class="globe-stage" data-globe="0.42">` + (pl
+    ? `<span class="gs-label">✈️ Paris → ${esc(pl.name)}</span>`
+    : `<span class="gs-label idle">Choisis ta destination, le globe s’y rend</span>`) + `</div>`;
+  body += `<div class="steps">` +
     Array.from({ length: WSTEPS }, (_, i) => `<i class="${i <= w.step ? 'done' : ''}"></i>`).join('') +
     `</div>`;
 
@@ -738,6 +796,14 @@ function renderWizard() {
   </div>`;
 
   elView().innerHTML = body;
+
+  if (pl && typeof pl.lat === 'number') {
+    const id = w.editId || 'brouillon';
+    fxTrips(w.editId ? null : { id, lat: pl.lat, lon: pl.lon });
+    FX.focus(pl.lat, pl.lon, id);
+  } else { fxTrips(); FX.focus(null); }
+  FX.mood('home');
+  fxAnchor();
 }
 
 function stepDestination(w) {
@@ -869,11 +935,14 @@ function renderTrip() {
     <div class="tb-title">${esc(t.name)}<span class="tb-sub">${esc(humanRange(t.startDate, t.endDate))}</span></div>
     <button class="tb-action" id="t-menu">⋯</button>`;
   // Fond photo du type de voyage, sous le dégradé teal semi-transparent.
-  elTop().style.backgroundImage = `linear-gradient(135deg, rgba(13,148,136,.72), rgba(15,118,110,.86)), url('${tripBg(t)}')`;
 
   const wv = t.weather ? weatherView(t.weather) : null;
 
-  let html = '';
+  const cd = countdown(t);
+  let html = `<div class="trip-hero" data-globe="0.46">
+    <div class="th-count">${esc(cd.big)}</div>
+    <div class="th-lbl">${flagEmoji(t.countryCode)} ${esc(t.destination || t.name)} · ${esc(cd.lbl)}</div>
+  </div>`;
   if (wv) {
     const clickable = !wv.cls || wv.cls !== 'err';
     html += `<div class="weather ${wv.cls} ${clickable ? 'tappable' : ''}" ${clickable ? 'id="weather-banner"' : ''}>
@@ -883,9 +952,16 @@ function renderTrip() {
     </div>`;
   }
 
-  html += `<div class="progress-wrap">
-    <div class="pw-top"><span>${done} sur ${total} préparés</span><span>${pct}%</span></div>
-    <div class="pw-bar"><i style="width:${pct}%"></i></div>
+  const C = 2 * Math.PI * 27;
+  const left = total - done;
+  html += `<div class="progress-wrap ${pct === 100 ? 'full' : ''}">
+    <div class="ring"><svg viewBox="0 0 64 64" aria-hidden="true">
+      <defs><linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="${pct === 100 ? '#fbbf5c' : '#0ea5e9'}"/></linearGradient></defs>
+      <circle class="r-bg" cx="32" cy="32" r="27"/>
+      <circle class="r-fg" cx="32" cy="32" r="27" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${(C * (1 - pct / 100)).toFixed(1)}"/>
+    </svg><b>${pct}%</b></div>
+    <div class="pw-txt"><div class="pw-top">${pct === 100 ? 'Valise bouclée ✨' : done + ' sur ' + total + ' préparés'}</div>
+      <div class="pw-sub">${pct === 100 ? 'Tout est prêt, il ne reste qu’à partir.' : left + ' objet' + (left > 1 ? 's' : '') + ' encore à mettre dans la valise'}</div></div>
   </div>`;
 
   html += `<div class="add-inline">
@@ -915,6 +991,11 @@ function renderTrip() {
   });
 
   elView().innerHTML = html;
+
+  fxTrips();
+  FX.focus(t.lat, t.lon, t.id);
+  FX.mood(weatherMood(t));
+  fxAnchor();
 }
 
 /* Rafraîchit la météo d'un voyage à venir si elle est ancienne (> 6 h).
@@ -951,7 +1032,13 @@ async function maybeRefreshWeather(t) {
 /* -------------------------------------------------------------------------
    7. ÉVÉNEMENTS (délégation)
    ------------------------------------------------------------------------- */
-function go(name, tripId) { route = { name, tripId: tripId || null }; render(); }
+function go(name, tripId) {
+  route = { name, tripId: tripId || null };
+  window.scrollTo(0, 0);
+  render();
+  const v = elView();
+  v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter');
+}
 
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-open],[data-geo],[data-type],[data-style],[data-transport],[data-adj],[data-toggle],[data-del],[data-edit],[data-cat],#fab-new,#w-back,#w-next,#w-prev,#geo-search,#geo-clear,#t-back,#t-menu,#add-btn,#h-settings,#weather-banner');
@@ -1035,7 +1122,18 @@ document.addEventListener('click', async (e) => {
   if (el.hasAttribute('data-toggle')) {
     const t = state.trips.find(x => x.id === route.tripId);
     const it = t.items.find(i => i.id === el.getAttribute('data-toggle'));
-    if (it) { it.checked = !it.checked; save(); renderTrip(); }
+    if (it) {
+      it.checked = !it.checked; save();
+      elView().classList.remove('enter');
+      renderTrip();
+      if (it.checked) {
+        const row = document.querySelector('[data-item="' + it.id + '"]');
+        const box = row && row.querySelector('.chk');
+        if (row) row.classList.add('pop');
+        if (box) { const r = box.getBoundingClientRect(); FX.burst(r.left + r.width / 2, r.top + r.height / 2, 1); }
+        if (t.items.every(i => i.checked)) { FX.celebrate(); toast('Valise bouclée, bon voyage ! ✈️'); }
+      }
+    }
     return;
   }
   if (el.hasAttribute('data-del')) {
@@ -1438,11 +1536,30 @@ async function doAppUpdate() {
   setTimeout(() => location.reload(), 500);
 }
 
+/* Inclinaison 3D des cartes voyage + reflet qui suit le doigt ou la souris. */
+document.addEventListener('pointermove', (e) => {
+  const card = e.target.closest && e.target.closest('[data-tilt]');
+  document.querySelectorAll('.trip-card.tilting').forEach(c => { if (c !== card) { c.classList.remove('tilting'); c.style.removeProperty('--rx'); c.style.removeProperty('--ry'); } });
+  if (!card) return;
+  const r = card.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+  card.classList.add('tilting');
+  card.style.setProperty('--ry', ((x - 0.5) * 10).toFixed(2) + 'deg');
+  card.style.setProperty('--rx', ((0.5 - y) * 8).toFixed(2) + 'deg');
+  card.style.setProperty('--mx', (x * 100).toFixed(1) + '%');
+  card.style.setProperty('--my', (y * 100).toFixed(1) + '%');
+}, { passive: true });
+document.addEventListener('pointerleave', () => {
+  document.querySelectorAll('.trip-card.tilting').forEach(c => { c.classList.remove('tilting'); c.style.removeProperty('--rx'); c.style.removeProperty('--ry'); });
+});
+addEventListener('resize', fxAnchor);
+
 /* -------------------------------------------------------------------------
    12. DÉMARRAGE
    ------------------------------------------------------------------------- */
 load();
 render();
+elView().classList.add('enter');
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').then((reg) => {
